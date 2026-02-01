@@ -1,5 +1,3 @@
-import { createCanvas } from "canvas";
-
 const LEETCODE_GRAPHQL = "https://leetcode.com/graphql";
 
 async function fetchLeetCodeCalendar(username) {
@@ -29,7 +27,7 @@ async function fetchLeetCodeCalendar(username) {
 
   const data = await res.json();
   const calStr = data?.data?.matchedUser?.userCalendar?.submissionCalendar;
-  if (!calStr) throw new Error("No calendar data found (username wrong or blocked).");
+  if (!calStr) throw new Error("No calendar data found.");
 
   return JSON.parse(calStr);
 }
@@ -42,8 +40,19 @@ function levelFromCount(c) {
   return 4;
 }
 
-function drawHeatmap(calendarMap, days = 90) {
-  const cell = 18, gap = 4, rows = 7;
+function escapeXml(str) {
+  return String(str)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
+}
+
+function buildHeatmapSVG(calendarMap, days = 365) {
+  const cell = 16;
+  const gap = 4;
+  const rows = 7;
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -60,11 +69,9 @@ function drawHeatmap(calendarMap, days = 90) {
   const width = cols * (cell + gap) + gap;
   const height = rows * (cell + gap) + gap;
 
-  const canvas = createCanvas(width, height);
-  const ctx = canvas.getContext("2d");
+  const colors = ["#1f2937", "#0e4429", "#006d32", "#26a641", "#39d353"];
 
-  ctx.fillStyle = "#0b0f14";
-  ctx.fillRect(0, 0, width, height);
+  let rects = "";
 
   for (let i = 0; i < totalDays; i++) {
     const d = new Date(start);
@@ -77,39 +84,43 @@ function drawHeatmap(calendarMap, days = 90) {
     const count = calendarMap[String(ts)] ?? 0;
     const level = levelFromCount(count);
 
-    const colors = ["#1f2937", "#0e4429", "#006d32", "#26a641", "#39d353"];
-    ctx.fillStyle = colors[level];
-
     const x = gap + col * (cell + gap);
     const y = gap + row * (cell + gap);
 
-    const r = 4;
-    ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.arcTo(x + cell, y, x + cell, y + cell, r);
-    ctx.arcTo(x + cell, y + cell, x, y + cell, r);
-    ctx.arcTo(x, y + cell, x, y, r);
-    ctx.arcTo(x, y, x + cell, y, r);
-    ctx.closePath();
-    ctx.fill();
+    const title = escapeXml(`${d.toISOString().slice(0, 10)}: ${count} submissions`);
+
+    rects += `
+      <g>
+        <title>${title}</title>
+        <rect x="${x}" y="${y}" width="${cell}" height="${cell}" rx="4" ry="4" fill="${colors[level]}" />
+      </g>
+    `;
   }
 
-  return canvas.toBuffer("image/png");
+  return `
+  <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+    <rect width="100%" height="100%" fill="#0b0f14"/>
+    ${rects}
+  </svg>
+  `.trim();
 }
 
 export default async function handler(req, res) {
   try {
     const username = req.query.username;
-    const days = Number(req.query.days || 90);
+    const days = Number(req.query.days || 365);
 
-    if (!username) return res.status(400).send("Missing ?username=");
+    if (!username) {
+      res.status(400).send("Missing ?username=");
+      return;
+    }
 
     const calendarMap = await fetchLeetCodeCalendar(username);
-    const png = drawHeatmap(calendarMap, Math.min(Math.max(days, 30), 365));
+    const svg = buildHeatmapSVG(calendarMap, Math.min(Math.max(days, 30), 365));
 
-    res.setHeader("Content-Type", "image/png");
+    res.setHeader("Content-Type", "image/svg+xml");
     res.setHeader("Cache-Control", "public, s-maxage=86400, stale-while-revalidate=3600");
-    res.status(200).send(png);
+    res.status(200).send(svg);
   } catch (e) {
     res.status(500).send(String(e?.message || e));
   }
